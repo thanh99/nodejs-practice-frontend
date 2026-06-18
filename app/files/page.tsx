@@ -73,7 +73,10 @@ export default function FilesPage() {
       setUploadProgress("Upload thành công!");
       fetchFiles();
     } catch (err: unknown) {
-      setUploadProgress((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Upload thất bại");
+      setUploadProgress(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          "Upload thất bại"
+      );
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -89,15 +92,19 @@ export default function FilesPage() {
     } catch {}
   };
 
+  const fileUrl = (filename: string) =>
+    `${process.env.NEXT_PUBLIC_API_URL?.replace("/api", "") || "http://localhost:5000"}/uploads/${filename}`;
+
   if (loading || !user) return null;
 
   return (
     <div>
       <Navbar />
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">Quản lý File</h1>
-          <div className="flex items-center gap-3">
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        {/* Header */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Quản lý File</h1>
+          <div className="flex items-center gap-2">
             {user.role === "admin" && (
               <button
                 onClick={() => setAllFiles(!allFiles)}
@@ -113,7 +120,7 @@ export default function FilesPage() {
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              className="flex-1 sm:flex-none bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               + Upload File
             </button>
@@ -139,60 +146,109 @@ export default function FilesPage() {
             <p>Chưa có file nào. Hãy upload file đầu tiên!</p>
           </div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left px-4 py-3 text-gray-500 font-medium">File</th>
-                  <th className="text-left px-4 py-3 text-gray-500 font-medium">Loại</th>
-                  <th className="text-left px-4 py-3 text-gray-500 font-medium">Kích thước</th>
-                  {allFiles && <th className="text-left px-4 py-3 text-gray-500 font-medium">Chủ sở hữu</th>}
-                  <th className="text-left px-4 py-3 text-gray-500 font-medium">Ngày upload</th>
-                  <th className="text-right px-4 py-3 text-gray-500 font-medium">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {files.map((file) => (
-                  <tr key={file._id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span>{getFileIcon(file.mimetype)}</span>
-                        <span className="text-gray-800 font-medium truncate max-w-[200px]">
-                          {file.originalName}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">{file.mimetype.split("/")[1]}</td>
-                    <td className="px-4 py-3 text-gray-500">{formatBytes(file.size)}</td>
+          <>
+            {/* Desktop: Table */}
+            <div className="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-gray-500 font-medium">File</th>
+                    <th className="text-left px-4 py-3 text-gray-500 font-medium">Loại</th>
+                    <th className="text-left px-4 py-3 text-gray-500 font-medium">Kích thước</th>
                     {allFiles && (
-                      <td className="px-4 py-3 text-gray-500">{file.owner?.username}</td>
+                      <th className="text-left px-4 py-3 text-gray-500 font-medium">Chủ sở hữu</th>
                     )}
-                    <td className="px-4 py-3 text-gray-500">
-                      {new Date(file.createdAt).toLocaleDateString("vi-VN")}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <a
-                          href={`${process.env.NEXT_PUBLIC_API_URL?.replace("/api", "") || "http://localhost:5000"}/uploads/${file.filename}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-blue-600 hover:underline text-xs"
-                        >
-                          Xem
-                        </a>
-                        <button
-                          onClick={() => handleDelete(file._id, file.originalName)}
-                          className="text-red-500 hover:text-red-700 text-xs"
-                        >
-                          Xóa
-                        </button>
-                      </div>
-                    </td>
+                    <th className="text-left px-4 py-3 text-gray-500 font-medium">Ngày upload</th>
+                    <th className="text-right px-4 py-3 text-gray-500 font-medium">Thao tác</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {files.map((file) => (
+                    <tr key={file._id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span>{getFileIcon(file.mimetype)}</span>
+                          <span className="text-gray-800 font-medium truncate max-w-[200px]">
+                            {file.originalName}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{file.mimetype.split("/")[1]}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatBytes(file.size)}</td>
+                      {allFiles && (
+                        <td className="px-4 py-3 text-gray-500">{file.owner?.username}</td>
+                      )}
+                      <td className="px-4 py-3 text-gray-500">
+                        {new Date(file.createdAt).toLocaleDateString("vi-VN")}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-3">
+                          <a
+                            href={fileUrl(file.filename)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-600 hover:underline text-xs"
+                          >
+                            Xem
+                          </a>
+                          <button
+                            onClick={() => handleDelete(file._id, file.originalName)}
+                            className="text-red-500 hover:text-red-700 text-xs"
+                          >
+                            Xóa
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile: Cards */}
+            <div className="md:hidden space-y-3">
+              {files.map((file) => (
+                <div
+                  key={file._id}
+                  className="bg-white rounded-xl border border-gray-200 p-4"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-2xl flex-shrink-0">{getFileIcon(file.mimetype)}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">
+                          {file.originalName}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {file.mimetype.split("/")[1]} · {formatBytes(file.size)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <a
+                        href={fileUrl(file.filename)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 text-sm font-medium"
+                      >
+                        Xem
+                      </a>
+                      <button
+                        onClick={() => handleDelete(file._id, file.originalName)}
+                        className="text-red-500 text-sm font-medium"
+                      >
+                        Xóa
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-gray-400">
+                    <span>{new Date(file.createdAt).toLocaleDateString("vi-VN")}</span>
+                    {allFiles && <span>@{file.owner?.username}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </main>
     </div>

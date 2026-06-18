@@ -37,20 +37,27 @@ function BarChart({ data, label }: { data: { _id: string; count: number }[]; lab
       {data.length === 0 ? (
         <p className="text-gray-400 text-sm">Chưa có dữ liệu</p>
       ) : (
-        <div className="flex items-end gap-2 h-24">
-          {data.map((d) => (
-            <div key={d._id} className="flex flex-col items-center flex-1">
+        <>
+          {/* Hàng 1: chỉ chứa các thanh bar, items-end để căn đáy */}
+          <div className="flex items-end gap-1 sm:gap-2 h-20">
+            {data.map((d) => (
               <div
-                className="w-full bg-blue-500 rounded-t"
-                style={{ height: `${(d.count / max) * 80}px`, minHeight: "4px" }}
+                key={d._id}
+                className="flex-1 bg-blue-500 rounded-t"
+                style={{ height: `${(d.count / max) * 100}%`, minHeight: "4px" }}
               />
-              <p className="text-xs text-gray-400 mt-1 truncate w-full text-center">
-                {d._id.slice(5)} {/* Hiện mm-dd */}
-              </p>
-              <p className="text-xs font-medium text-gray-600">{d.count}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+          {/* Hàng 2: label ngày + số đếm, tách riêng để không bị che */}
+          <div className="flex gap-1 sm:gap-2 mt-1">
+            {data.map((d) => (
+              <div key={d._id} className="flex-1 text-center">
+                <p className="text-xs text-gray-400 truncate">{d._id.slice(5)}</p>
+                <p className="text-xs font-semibold text-gray-600">{d.count}</p>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -80,15 +87,15 @@ export default function StatsPage() {
   return (
     <div>
       <Navbar />
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold text-gray-800 mb-6">
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-800 mb-6">
           {user.role === "admin" ? "Thống kê hệ thống" : "Thống kê của bạn"}
         </h1>
 
         {/* ADMIN VIEW */}
         {user.role === "admin" && adminStats && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 mb-6">
               <div className="bg-white p-6 rounded-xl border border-gray-200">
                 <p className="text-sm text-gray-500">Tổng số User</p>
                 <p className="text-3xl font-bold text-blue-600 mt-1">{adminStats.totalUsers}</p>
@@ -105,11 +112,11 @@ export default function StatsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-white p-6 rounded-xl border border-gray-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+              <div className="bg-white p-4 sm:p-6 rounded-xl border border-gray-200">
                 <BarChart data={adminStats.filesByDay} label="File upload theo ngày (7 ngày gần nhất)" />
               </div>
-              <div className="bg-white p-6 rounded-xl border border-gray-200">
+              <div className="bg-white p-4 sm:p-6 rounded-xl border border-gray-200">
                 <BarChart data={adminStats.usersByDay} label="User đăng ký theo ngày (7 ngày gần nhất)" />
               </div>
             </div>
@@ -119,7 +126,7 @@ export default function StatsPage() {
         {/* USER VIEW */}
         {user.role !== "admin" && userStats && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-6">
               <div className="bg-white p-6 rounded-xl border border-gray-200">
                 <p className="text-sm text-gray-500">File của bạn</p>
                 <p className="text-3xl font-bold text-blue-600 mt-1">{userStats.totalFiles}</p>
