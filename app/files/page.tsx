@@ -12,6 +12,7 @@ type FileItem = {
   filename: string;
   mimetype: string;
   size: number;
+  url?: string;
   createdAt: string;
   owner: { username: string; email: string };
 };
@@ -92,8 +93,14 @@ export default function FilesPage() {
     } catch {}
   };
 
-  const fileUrl = (filename: string) =>
-    `${process.env.NEXT_PUBLIC_API_URL?.replace("/api", "") || "http://localhost:5000"}/uploads/${filename}`;
+  const fileUrl = (file: FileItem) => file.url ?? "";
+
+  const downloadLink = (file: FileItem) => {
+    if (!file.url) return "";
+    const token = localStorage.getItem("token") ?? "";
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+    return `${base}/files/${file._id}/download?token=${encodeURIComponent(token)}`;
+  };
 
   if (loading || !user) return null;
 
@@ -184,13 +191,21 @@ export default function FilesPage() {
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-3">
                           <a
-                            href={fileUrl(file.filename)}
+                            href={fileUrl(file)}
                             target="_blank"
                             rel="noreferrer"
                             className="text-blue-600 hover:underline text-xs"
                           >
                             Xem
                           </a>
+                          {file.url && (
+                            <a
+                              href={downloadLink(file)}
+                              className="text-green-600 hover:underline text-xs"
+                            >
+                              Tải về
+                            </a>
+                          )}
                           <button
                             onClick={() => handleDelete(file._id, file.originalName)}
                             className="text-red-500 hover:text-red-700 text-xs"
@@ -226,13 +241,21 @@ export default function FilesPage() {
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <a
-                        href={fileUrl(file.filename)}
+                        href={fileUrl(file)}
                         target="_blank"
                         rel="noreferrer"
                         className="text-blue-600 text-sm font-medium"
                       >
                         Xem
                       </a>
+                      {file.url && (
+                        <a
+                          href={downloadLink(file)}
+                          className="text-green-600 text-sm font-medium"
+                        >
+                          Tải về
+                        </a>
+                      )}
                       <button
                         onClick={() => handleDelete(file._id, file.originalName)}
                         className="text-red-500 text-sm font-medium"
