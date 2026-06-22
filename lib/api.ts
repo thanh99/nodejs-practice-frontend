@@ -18,6 +18,11 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      // [SINGLE-SESSION] Bỏ comment để hiển thị thông báo khi bị kick
+      // const code = error.response?.data?.code;
+      // if (code === "SESSION_INVALIDATED") {
+      //   sessionStorage.setItem("loginMessage", "Phiên đăng nhập đã hết hạn vì tài khoản được đăng nhập ở thiết bị khác.");
+      // }
       localStorage.removeItem("token");
       localStorage.removeItem("user");
       window.location.href = "/login";

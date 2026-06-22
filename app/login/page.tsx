@@ -10,6 +10,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // [SINGLE-SESSION] Bỏ comment để hiển thị banner khi bị kick
+  // const [info, setInfo] = useState("");
+  // useEffect(() => {
+  //   const msg = sessionStorage.getItem("loginMessage");
+  //   if (msg) { setInfo(msg); sessionStorage.removeItem("loginMessage"); }
+  // }, []);
 
   const { login } = useAuth();
   const router = useRouter();
@@ -34,6 +40,13 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 w-full max-w-md">
         <h1 className="text-2xl font-bold text-gray-800 mb-6">Đăng nhập</h1>
+
+        {/* [SINGLE-SESSION] Bỏ comment để hiển thị banner vàng */}
+        {/* {info && (
+          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-lg text-sm">
+            {info}
+          </div>
+        )} */}
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm">
