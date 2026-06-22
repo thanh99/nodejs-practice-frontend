@@ -40,7 +40,35 @@ export default function FilesPage() {
   const [uploadProgress, setUploadProgress] = useState("");
   const [allFiles, setAllFiles] = useState(false);
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
+  const [lightbox, setLightbox] = useState<FileItem | null>(null);
+  const [zoom, setZoom] = useState(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Đóng lightbox bằng ESC
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeLightbox();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const openLightbox = (file: FileItem) => {
+    setLightbox(file);
+    setZoom(1);
+    document.body.style.overflow = "hidden";
+  };
+
+  const closeLightbox = () => {
+    setLightbox(null);
+    setZoom(1);
+    document.body.style.overflow = "";
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    setZoom((z) => Math.min(4, Math.max(0.5, z - e.deltaY * 0.001)));
+  };
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
@@ -191,8 +219,11 @@ export default function FilesPage() {
                 key={file._id}
                 className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col"
               >
-                {/* Preview area */}
-                <div className="relative bg-gray-100 aspect-video flex items-center justify-center overflow-hidden">
+                {/* Preview area — click để phóng to */}
+                <div
+                  className="relative bg-gray-100 aspect-video flex items-center justify-center overflow-hidden cursor-zoom-in"
+                  onClick={() => (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) && openLightbox(file)}
+                >
                   {file.mimetype.startsWith("image/") ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -203,15 +234,20 @@ export default function FilesPage() {
                   ) : file.mimetype.startsWith("video/") ? (
                     <video
                       src={file.url}
-                      controls
-                      className="w-full h-full object-contain bg-black"
+                      className="w-full h-full object-contain bg-black pointer-events-none"
                     />
                   ) : (
-                    <div className="flex flex-col items-center gap-2 text-gray-400">
+                    <div className="flex flex-col items-center gap-2 text-gray-400 cursor-default">
                       <span className="text-5xl">{getFileIcon(file.mimetype)}</span>
                       <span className="text-xs uppercase tracking-wide">
                         {file.mimetype.split("/")[1]}
                       </span>
+                    </div>
+                  )}
+                  {/* Overlay hint */}
+                  {(file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) && (
+                    <div className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-colors flex items-center justify-center">
+                      <span className="opacity-0 hover:opacity-100 text-white text-2xl transition-opacity">⤢</span>
                     </div>
                   )}
                 </div>
@@ -377,6 +413,86 @@ export default function FilesPage() {
           </>
         )}
       </main>
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex flex-col"
+          onClick={closeLightbox}
+        >
+          {/* Toolbar */}
+          <div
+            className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="text-white text-sm truncate max-w-xs">{lightbox.originalName}</span>
+            <div className="flex items-center gap-2">
+              {lightbox.mimetype.startsWith("image/") && (
+                <>
+                  <button
+                    onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))}
+                    className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white text-lg flex items-center justify-center transition-colors"
+                  >
+                    −
+                  </button>
+                  <span className="text-white text-sm w-12 text-center">
+                    {Math.round(zoom * 100)}%
+                  </span>
+                  <button
+                    onClick={() => setZoom((z) => Math.min(4, +(z + 0.25).toFixed(2)))}
+                    className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white text-lg flex items-center justify-center transition-colors"
+                  >
+                    +
+                  </button>
+                  <button
+                    onClick={() => setZoom(1)}
+                    className="px-2 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs transition-colors"
+                  >
+                    Reset
+                  </button>
+                </>
+              )}
+              <button
+                onClick={closeLightbox}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white text-lg flex items-center justify-center transition-colors ml-2"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div
+            className="flex-1 flex items-center justify-center overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={lightbox.mimetype.startsWith("image/") ? handleWheel : undefined}
+          >
+            {lightbox.mimetype.startsWith("image/") ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={lightbox.url}
+                alt={lightbox.originalName}
+                style={{ transform: `scale(${zoom})`, transition: "transform 0.15s ease" }}
+                className="max-w-full max-h-full object-contain select-none"
+                draggable={false}
+              />
+            ) : (
+              <video
+                src={lightbox.url}
+                controls
+                autoPlay
+                className="max-w-full max-h-full"
+              />
+            )}
+          </div>
+
+          <p className="text-center text-white/40 text-xs pb-3 flex-shrink-0">
+            {lightbox.mimetype.startsWith("image/")
+              ? "Scroll chuột hoặc dùng nút +/− để zoom • ESC để đóng"
+              : "ESC để đóng"}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
