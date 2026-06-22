@@ -58,20 +58,24 @@ export default function FilesPage() {
   }, [user, allFiles]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const selectedFiles = Array.from(e.target.files ?? []);
+    if (selectedFiles.length === 0) return;
 
     setUploading(true);
-    setUploadProgress(`Đang upload "${file.name}"...`);
+    setUploadProgress(
+      selectedFiles.length === 1
+        ? `Đang upload "${selectedFiles[0].name}"...`
+        : `Đang upload ${selectedFiles.length} files...`
+    );
 
     const formData = new FormData();
-    formData.append("file", file);
+    selectedFiles.forEach((file) => formData.append("files", file));
 
     try {
-      await api.post("/files/upload", formData, {
+      const { data } = await api.post("/files/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setUploadProgress("Upload thành công!");
+      setUploadProgress(data.message);
       fetchFiles();
     } catch (err: unknown) {
       setUploadProgress(
@@ -137,6 +141,7 @@ export default function FilesPage() {
               className="hidden"
               onChange={handleUpload}
               accept="image/*,application/pdf,.doc,.docx,video/*"
+              multiple
             />
           </div>
         </div>
