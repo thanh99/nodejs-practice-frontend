@@ -39,6 +39,7 @@ export default function FilesPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [allFiles, setAllFiles] = useState(false);
+  const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -128,6 +129,31 @@ export default function FilesPage() {
                 {allFiles ? "Tất cả file" : "File của tôi"}
               </button>
             )}
+            {/* Toggle view */}
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+              <button
+                onClick={() => setViewMode("table")}
+                className={`px-3 py-1.5 text-sm transition-colors ${
+                  viewMode === "table"
+                    ? "bg-gray-800 text-white"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+                title="Dạng bảng"
+              >
+                ☰
+              </button>
+              <button
+                onClick={() => setViewMode("grid")}
+                className={`px-3 py-1.5 text-sm transition-colors ${
+                  viewMode === "grid"
+                    ? "bg-gray-800 text-white"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+                title="Dạng lưới"
+              >
+                ⊞
+              </button>
+            </div>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
@@ -156,6 +182,78 @@ export default function FilesPage() {
           <div className="text-center py-16 text-gray-400">
             <p className="text-4xl mb-3">📂</p>
             <p>Chưa có file nào. Hãy upload file đầu tiên!</p>
+          </div>
+        ) : viewMode === "grid" ? (
+          /* Grid view: 2 cột, ảnh/video xem trực tiếp */
+          <div className="grid grid-cols-2 gap-4">
+            {files.map((file) => (
+              <div
+                key={file._id}
+                className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col"
+              >
+                {/* Preview area */}
+                <div className="relative bg-gray-100 aspect-video flex items-center justify-center overflow-hidden">
+                  {file.mimetype.startsWith("image/") ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={file.url}
+                      alt={file.originalName}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : file.mimetype.startsWith("video/") ? (
+                    <video
+                      src={file.url}
+                      controls
+                      className="w-full h-full object-contain bg-black"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 text-gray-400">
+                      <span className="text-5xl">{getFileIcon(file.mimetype)}</span>
+                      <span className="text-xs uppercase tracking-wide">
+                        {file.mimetype.split("/")[1]}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Info + actions */}
+                <div className="p-3 flex flex-col gap-1.5">
+                  <p className="text-sm font-medium text-gray-800 truncate" title={file.originalName}>
+                    {file.originalName}
+                  </p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-400">{formatBytes(file.size)}</span>
+                    {allFiles && (
+                      <span className="text-xs text-gray-400">@{file.owner?.username}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 pt-1">
+                    <a
+                      href={fileUrl(file)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-600 hover:underline text-xs"
+                    >
+                      Xem
+                    </a>
+                    {file.url && (
+                      <a
+                        href={downloadLink(file)}
+                        className="text-green-600 hover:underline text-xs"
+                      >
+                        Tải về
+                      </a>
+                    )}
+                    <button
+                      onClick={() => handleDelete(file._id, file.originalName)}
+                      className="text-red-500 hover:text-red-700 text-xs ml-auto"
+                    >
+                      Xóa
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
           <>
@@ -282,3 +380,4 @@ export default function FilesPage() {
     </div>
   );
 }
+
