@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { ThemeProvider } from "@/context/ThemeContext";
+import { NotificationProvider } from "@/context/NotificationContext";
+import { ToastProvider } from "@/context/ToastContext";
+import ToastContainer from "@/components/ToastContainer";
 import RippleEffect from "@/components/RippleEffect";
 
 export const metadata: Metadata = {
@@ -15,8 +18,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen" suppressHydrationWarning>
         <ThemeProvider>
           <AuthProvider>
-            <RippleEffect />
-            {children}
+            <ToastProvider>
+              <NotificationProvider>
+                <RippleEffect />
+                <ToastContainer />
+                {children}
+              </NotificationProvider>
+            </ToastProvider>
           </AuthProvider>
         </ThemeProvider>
       </body>

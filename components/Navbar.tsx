@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
+import { useNotifications } from "@/context/NotificationContext";
+import NotificationPanel from "@/components/NotificationPanel";
 import api from "@/lib/api";
 
 const AVATAR_COLORS = [
@@ -36,10 +38,12 @@ type ProfileMsg = { type: "success" | "error"; text: string } | null;
 export default function Navbar() {
   const { user, logout, updateUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { unreadCount } = useNotifications();
   const router = useRouter();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
 
   // Đổi tên
   const [newUsername, setNewUsername] = useState("");
@@ -145,6 +149,23 @@ export default function Navbar() {
                   </Link>
                 ))}
                 <div className="flex items-center gap-3 ml-4 pl-4 border-l border-gray-200 dark:border-gray-700">
+                  {/* Notification bell */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setNotifOpen((o) => !o)}
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative"
+                      title="Thông báo"
+                    >
+                      🔔
+                      {unreadCount > 0 && (
+                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+                          {unreadCount > 9 ? "9+" : unreadCount}
+                        </span>
+                      )}
+                    </button>
+                    {notifOpen && <NotificationPanel onClose={() => setNotifOpen(false)} />}
+                  </div>
+
                   {/* Theme toggle */}
                   <button
                     onClick={toggleTheme}

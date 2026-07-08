@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import Navbar from "@/components/Navbar";
 import api from "@/lib/api";
 
@@ -64,15 +65,17 @@ function getFileIcon(mimetype: string) {
 
 export default function FilesPage() {
   const { user, loading } = useAuth();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("mine");
+  const [highlightedFileId, setHighlightedFileId] = useState<string | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [receivedShares, setReceivedShares] = useState<ShareItem[]>([]);
   const [sentShares, setSentShares] = useState<ShareItem[]>([]);
 
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState("");
   const [allFiles, setAllFiles] = useState(false);
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
 
@@ -93,6 +96,11 @@ export default function FilesPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
+  // Drag & Drop — dragCounter giải quyết vấn đề flicker khi kéo qua child elements
+  // Khi drag vào child, dragleave cha bị fire → cần đếm để biết còn trong vùng không
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -110,6 +118,21 @@ export default function FilesPage() {
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
   }, [user, loading, router]);
+
+  // Đọc ?tab= và ?fileId= từ URL (dùng khi điều hướng từ notification)
+  useEffect(() => {
+    const tabParam = searchParams.get("tab") as Tab | null;
+    const fileIdParam = searchParams.get("fileId");
+    const validTabs: Tab[] = ["mine", "received", "sent", "favorites"];
+    if (tabParam && validTabs.includes(tabParam)) {
+      setTab(tabParam);
+    }
+    if (fileIdParam) {
+      setHighlightedFileId(fileIdParam);
+      // Tự động bỏ highlight sau 3s
+      setTimeout(() => setHighlightedFileId(null), 3000);
+    }
+  }, [searchParams]);
 
   const fetchFiles = async (pageNum = 1, append = false) => {
     if (append) setLoadingMore(true);
@@ -202,28 +225,26 @@ export default function FilesPage() {
     const selectedFiles = Array.from(e.target.files ?? []);
     if (selectedFiles.length === 0) return;
     setUploading(true);
-    setUploadProgress(
-      selectedFiles.length === 1
-        ? `Đang upload "${selectedFiles[0].name}"...`
-        : `Đang upload ${selectedFiles.length} files...`
-    );
+    const msg = selectedFiles.length === 1
+      ? `Đang upload "${selectedFiles[0].name}"...`
+      : `Đang upload ${selectedFiles.length} files...`;
+    toastInfo(msg, 5000);
     const formData = new FormData();
     selectedFiles.forEach((file) => formData.append("files", file));
     try {
       const { data } = await api.post("/files/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setUploadProgress(data.message);
+      toastSuccess(data.message);
       fetchFiles(1, false);
     } catch (err: unknown) {
-      setUploadProgress(
+      toastError(
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
           "Upload thất bại"
       );
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      setTimeout(() => setUploadProgress(""), 3000);
     }
   };
 
@@ -232,7 +253,10 @@ export default function FilesPage() {
     try {
       await api.delete(`/files/${id}`);
       setFiles((prev) => prev.filter((f) => f._id !== id));
-    } catch {}
+      toastSuccess(`Đã xóa "${name}"`);
+    } catch {
+      toastError("Xóa file thất bại");
+    }
   };
 
   const handleShare = async () => {
@@ -263,7 +287,10 @@ export default function FilesPage() {
     try {
       await api.delete(`/shares/${shareId}`);
       setSentShares((prev) => prev.filter((s) => s._id !== shareId));
-    } catch {}
+      toastSuccess("Đã thu hồi chia sẻ");
+    } catch {
+      toastError("Thu hồi thất bại");
+    }
   };
 
   const downloadLink = (fileId: string) => {
@@ -295,6 +322,68 @@ export default function FilesPage() {
     setShareMsg(null);
   };
 
+  // ── Drag & Drop handlers ────────────────────────────────────────────────
+  // dragenter: fire khi đi vào vùng drop (kể cả vào child elements)
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    // Chỉ phản ứng khi kéo file, không phải text/link
+    if (!Array.from(e.dataTransfer.items).some((i) => i.kind === "file")) return;
+    dragCounter.current += 1;
+    setIsDragOver(true);
+  };
+
+  // dragleave: fire khi rời khỏi vùng drop — cần check counter
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current -= 1;
+    if (dragCounter.current === 0) setIsDragOver(false);
+  };
+
+  // dragover: bắt buộc preventDefault để trình duyệt cho phép drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  // drop: lấy files từ DataTransfer API rồi upload
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current = 0;
+    setIsDragOver(false);
+
+    // DataTransfer.files — đây là FileList từ kéo thả
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    if (droppedFiles.length === 0) return;
+
+    // Chuyển sang tab "mine" nếu đang ở tab khác
+    setTab("mine");
+
+    setUploading(true);
+    const msg = droppedFiles.length === 1
+      ? `Đang upload "${droppedFiles[0].name}"...`
+      : `Đang upload ${droppedFiles.length} files...`;
+    toastInfo(msg, 5000);
+
+    const formData = new FormData();
+    droppedFiles.forEach((f) => formData.append("files", f));
+
+    try {
+      const { data } = await api.post("/files/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      toastSuccess(data.message);
+      fetchFiles(1, false);
+    } catch (err: unknown) {
+      toastError(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || "Upload thất bại"
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+  // ────────────────────────────────────────────────────────────────────────
+
   if (loading || !user) return null;
 
   const TABS: { key: Tab; label: string }[] = [
@@ -305,7 +394,29 @@ export default function FilesPage() {
   ];
 
   return (
-    <div>
+    <div
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      className="relative"
+    >
+      {/* Drag & Drop Overlay
+          Hiển thị khi kéo file vào trang
+          pointer-events-none để không chặn các sự kiện drag bên dưới */}
+      {isDragOver && (
+        <div className="fixed inset-0 z-50 pointer-events-none flex items-center justify-center">
+          {/* Backdrop mờ */}
+          <div className="absolute inset-0 bg-blue-600/20 dark:bg-blue-900/40 backdrop-blur-sm" />
+          {/* Drop zone card */}
+          <div className="relative flex flex-col items-center gap-4 bg-white dark:bg-gray-800 border-4 border-dashed border-blue-500 dark:border-blue-400 rounded-3xl px-16 py-12 shadow-2xl animate-scale-in">
+            <div className="text-6xl animate-bounce">📂</div>
+            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">Thả file để upload</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Hỗ trợ nhiều file cùng lúc</p>
+          </div>
+        </div>
+      )}
+
       <Navbar />
       <main className="max-w-6xl mx-auto px-4 py-6">
 
@@ -387,12 +498,6 @@ export default function FilesPage() {
                 />
               </div>
             </div>
-
-            {uploadProgress && (
-              <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-lg text-sm">
-                {uploadProgress}
-              </div>
-            )}
 
             {files.length === 0 ? (
               <div className="text-center py-16 text-gray-400 dark:text-gray-500 animate-fade-in">
@@ -589,7 +694,15 @@ export default function FilesPage() {
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-2 gap-4">
                 {receivedShares.map((share, i) => (
-                  <div key={share._id} className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col card-lift animate-fade-in-up" style={{ animationDelay: `${i * 60}ms` }}>
+                  <div
+                    key={share._id}
+                    className={`rounded-xl border overflow-hidden flex flex-col card-lift animate-fade-in-up transition-colors duration-500 ${
+                      highlightedFileId === share.file._id
+                        ? "bg-blue-50 dark:bg-blue-900/30 border-blue-400 dark:border-blue-500 ring-2 ring-blue-400 dark:ring-blue-500"
+                        : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700"
+                    }`}
+                    style={{ animationDelay: `${i * 60}ms` }}
+                  >
                     <div
                       className="relative bg-gray-100 dark:bg-gray-700 aspect-video flex items-center justify-center overflow-hidden cursor-zoom-in"
                       onClick={() =>
@@ -658,7 +771,14 @@ export default function FilesPage() {
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                       {receivedShares.map((share) => (
-                        <tr key={share._id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <tr
+                          key={share._id}
+                          className={`transition-colors duration-500 ${
+                            highlightedFileId === share.file._id
+                              ? "bg-blue-50 dark:bg-blue-900/25"
+                              : "hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                          }`}
+                        >
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <span>{getFileIcon(share.file.mimetype)}</span>
@@ -695,7 +815,14 @@ export default function FilesPage() {
                 {/* Mobile */}
                 <div className="md:hidden space-y-3">
                   {receivedShares.map((share) => (
-                    <div key={share._id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+                    <div
+                      key={share._id}
+                      className={`rounded-xl border p-4 transition-colors duration-500 ${
+                        highlightedFileId === share.file._id
+                          ? "bg-blue-50 dark:bg-blue-900/30 border-blue-400 dark:border-blue-500"
+                          : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700"
+                      }`}
+                    >
                       <div className="flex items-center gap-2 mb-2">
                         <span className="text-2xl flex-shrink-0">{getFileIcon(share.file.mimetype)}</span>
                         <div className="min-w-0">
