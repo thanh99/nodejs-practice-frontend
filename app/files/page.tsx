@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
@@ -64,7 +64,10 @@ function getFileIcon(mimetype: string) {
   return "📁";
 }
 
-export default function FilesPage() {
+// useSearchParams() phải nằm trong Suspense boundary khi build production.
+// Next.js App Router yêu cầu điều này vì searchParams có thể thay đổi
+// sau khi trang đã được server-render → cần Suspense để "bail out" sang CSR.
+function FilesPageContent() {
   const { user, loading } = useAuth();
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const router = useRouter();
@@ -1550,7 +1553,7 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* Keyboard Shortcuts Modal (Tính năng 3) — hiện khi nhấn '?' */}
+      {/* Keyboard Shortcuts Modal (Tính năng 3) — nhấn '?' để hiện */}
       {showShortcuts && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowShortcuts(false)}>
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
@@ -1579,5 +1582,16 @@ export default function FilesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// Export mặc định bọc trong Suspense để thỏa điều kiện của Next.js App Router:
+// useSearchParams() chỉ hoạt động trong CSR context — Suspense boundary
+// báo cho Next.js biết phần này cần "suspend" khi render phía server.
+export default function FilesPage() {
+  return (
+    <Suspense>
+      <FilesPageContent />
+    </Suspense>
   );
 }
