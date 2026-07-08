@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -64,14 +64,10 @@ function getFileIcon(mimetype: string) {
   return "📁";
 }
 
-// useSearchParams() phải nằm trong Suspense boundary khi build production.
-// Next.js App Router yêu cầu điều này vì searchParams có thể thay đổi
-// sau khi trang đã được server-render → cần Suspense để "bail out" sang CSR.
-function FilesPageContent() {
+export default function FilesPage() {
   const { user, loading } = useAuth();
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("mine");
   const [highlightedFileId, setHighlightedFileId] = useState<string | null>(null);
@@ -183,20 +179,22 @@ function FilesPageContent() {
     if (!loading && !user) router.replace("/login");
   }, [user, loading, router]);
 
-  // Đọc ?tab= và ?fileId= từ URL (dùng khi điều hướng từ notification)
+  // Đọc ?tab= và ?fileId= từ URL khi mount (dùng khi điều hướng từ notification).
+  // Dùng window.location.search thay vì useSearchParams() để tránh yêu cầu
+  // Suspense boundary của Next.js App Router — trang này là client-only anyway.
   useEffect(() => {
-    const tabParam = searchParams.get("tab") as Tab | null;
-    const fileIdParam = searchParams.get("fileId");
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get("tab") as Tab | null;
+    const fileIdParam = params.get("fileId");
     const validTabs: Tab[] = ["mine", "received", "sent", "favorites"];
     if (tabParam && validTabs.includes(tabParam)) {
       setTab(tabParam);
     }
     if (fileIdParam) {
       setHighlightedFileId(fileIdParam);
-      // Tự động bỏ highlight sau 3s
       setTimeout(() => setHighlightedFileId(null), 3000);
     }
-  }, [searchParams]);
+  }, []);
 
   // Cập nhật filterRef mỗi khi filter thay đổi
   useEffect(() => {
@@ -1582,16 +1580,5 @@ function FilesPageContent() {
         </div>
       )}
     </div>
-  );
-}
-
-// Export mặc định bọc trong Suspense để thỏa điều kiện của Next.js App Router:
-// useSearchParams() chỉ hoạt động trong CSR context — Suspense boundary
-// báo cho Next.js biết phần này cần "suspend" khi render phía server.
-export default function FilesPage() {
-  return (
-    <Suspense>
-      <FilesPageContent />
-    </Suspense>
   );
 }
