@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
+import { useDebounce } from "@/hooks/useDebounce";
 import Navbar from "@/components/Navbar";
 import api from "@/lib/api";
 
@@ -96,23 +97,83 @@ export default function FilesPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Drag & Drop — dragCounter giải quyết vấn đề flicker khi kéo qua child elements
-  // Khi drag vào child, dragleave cha bị fire → cần đếm để biết còn trong vùng không
+  // ── Search + Filter (Tính năng 1) ──────────────────────────────────────
+  type FilterType = "all" | "image" | "video" | "pdf" | "other";
+  const [searchQuery, setSearchQuery]   = useState("");
+  const [filterType, setFilterType]     = useState<FilterType>("all");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo]     = useState("");
+  // useDebounce: chỉ gửi request sau 400ms user ngừng gõ
+  const debouncedSearch = useDebounce(searchQuery, 400);
+  const searchInputRef  = useRef<HTMLInputElement>(null);
+
+  // Ref luôn giữ giá trị filter hiện tại — dùng trong IntersectionObserver
+  // (tránh stale closure vì observer callback không re-subscribe khi state thay đổi)
+  const filterRef = useRef({ search: "", type: "all", dateFrom: "", dateTo: "" });
+
+  // ── Multi-select + Bulk Delete (Tính năng 2) ───────────────────────────
+  const [selectedIds,  setSelectedIds]  = useState<Set<string>>(new Set());
+  const [isSelecting,  setIsSelecting]  = useState(false);
+  // lastClickIdx: nhớ vị trí click cuối để tính range khi shift+click
+  const lastClickIdx = useRef<number>(-1);
+
+  // ── Shortcuts help modal (Tính năng 3) ─────────────────────────────────
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
+  // Refs để keydown handler luôn đọc giá trị mới nhất mà không cần re-subscribe
+  const filesRef      = useRef<FileItem[]>([]);
+  const selectedIdsRef = useRef<Set<string>>(new Set());
+  const isSelectingRef = useRef(false);
+  useEffect(() => { filesRef.current       = files; },       [files]);
+  useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
+  useEffect(() => { isSelectingRef.current = isSelecting; }, [isSelecting]);
+
+  // ── Drag & Drop ─────────────────────────────────────────────────────────
+  // dragCounter giải quyết vấn đề flicker khi kéo qua child elements
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Keyboard Shortcuts (Tính năng 3)
+  // Dùng refs thay vì deps array để tránh re-subscribe mỗi lần files/selectedIds thay đổi
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const inInput = ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName);
+
       if (e.key === "Escape") {
         setLightbox(null);
         document.body.style.overflow = "";
         setShareModal(null);
+        setShowShortcuts(false);
+        if (isSelectingRef.current) { setIsSelecting(false); setSelectedIds(new Set()); }
+        return;
+      }
+
+      if (inInput) return;
+
+      if (e.key === "/" || (e.key === "k" && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === "g") {
+        setViewMode((v) => v === "table" ? "grid" : "table");
+      } else if (e.key === "u") {
+        fileInputRef.current?.click();
+      } else if (e.key === "?") {
+        setShowShortcuts((v) => !v);
+      } else if (e.key === "a" && isSelectingRef.current) {
+        e.preventDefault();
+        const cur = filesRef.current;
+        setSelectedIds((prev) =>
+          prev.size === cur.length ? new Set() : new Set(cur.map((f) => f._id))
+        );
+      } else if ((e.key === "Delete" || e.key === "Backspace") && isSelectingRef.current && selectedIdsRef.current.size > 0) {
+        handleBulkDelete();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -134,11 +195,28 @@ export default function FilesPage() {
     }
   }, [searchParams]);
 
-  const fetchFiles = async (pageNum = 1, append = false) => {
+  // Cập nhật filterRef mỗi khi filter thay đổi
+  useEffect(() => {
+    filterRef.current = {
+      search: debouncedSearch,
+      type: filterType,
+      dateFrom: filterDateFrom,
+      dateTo: filterDateTo,
+    };
+  }, [debouncedSearch, filterType, filterDateFrom, filterDateTo]);
+
+  type FetchOpts = { search?: string; type?: string; dateFrom?: string; dateTo?: string };
+
+  const fetchFiles = async (pageNum = 1, append = false, opts: FetchOpts = filterRef.current) => {
     if (append) setLoadingMore(true);
     try {
       const endpoint = allFiles && user?.role === "admin" ? "/files/all" : "/files";
-      const { data } = await api.get(endpoint, { params: { page: pageNum, limit: 20 } });
+      const params: Record<string, string | number> = { page: pageNum, limit: 20 };
+      if (opts.search) params.search = opts.search;
+      if (opts.type && opts.type !== "all") params.type = opts.type;
+      if (opts.dateFrom) params.dateFrom = opts.dateFrom;
+      if (opts.dateTo)   params.dateTo   = opts.dateTo;
+      const { data } = await api.get(endpoint, { params });
       setFiles((prev) => append ? [...prev, ...data.files] : data.files);
       setHasMore(data.hasMore ?? false);
       setPage(pageNum);
@@ -180,12 +258,28 @@ export default function FilesPage() {
     if (tab === "mine") {
       setPage(1);
       setHasMore(false);
+      setSelectedIds(new Set());
       fetchFiles(1, false);
     } else if (tab === "received") fetchReceivedShares();
     else if (tab === "sent") fetchSentShares();
     else if (tab === "favorites") fetchFavorites();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, tab, allFiles]);
+
+  // Refetch khi debounced search hoặc filter thay đổi
+  useEffect(() => {
+    if (!user || tab !== "mine") return;
+    setPage(1);
+    setHasMore(false);
+    setSelectedIds(new Set());
+    fetchFiles(1, false, {
+      search: debouncedSearch,
+      type: filterType,
+      dateFrom: filterDateFrom,
+      dateTo: filterDateTo,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, filterType, filterDateFrom, filterDateTo]);
 
   // IntersectionObserver: khi sentinel hiện ra trong viewport thì load trang tiếp
   useEffect(() => {
@@ -320,6 +414,80 @@ export default function FilesPage() {
     setShareModal(file);
     setShareInput("");
     setShareMsg(null);
+  };
+
+  // ── Multi-select handlers (Tính năng 2) ────────────────────────────────
+  const toggleSelect = (fileId: string, idx: number, shiftKey = false) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastClickIdx.current >= 0) {
+        // Shift+click: chọn toàn bộ range từ lastClickIdx đến idx
+        const [from, to] = [Math.min(lastClickIdx.current, idx), Math.max(lastClickIdx.current, idx)];
+        files.slice(from, to + 1).forEach((f) => next.add(f._id));
+      } else {
+        if (next.has(fileId)) next.delete(fileId);
+        else next.add(fileId);
+      }
+      return next;
+    });
+    lastClickIdx.current = idx;
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Xóa ${selectedIds.size} file đã chọn?`)) return;
+    try {
+      const { data } = await api.delete("/files/bulk", { data: { ids: [...selectedIds] } });
+      setFiles((prev) => prev.filter((f) => !selectedIds.has(f._id)));
+      setSelectedIds(new Set());
+      toastSuccess(data.message);
+    } catch {
+      toastError("Xóa thất bại");
+    }
+  };
+
+  // ── Export CSV/JSON (Tính năng 4) ───────────────────────────────────────
+  // Dạy: Blob API, URL.createObjectURL, kích hoạt download bằng <a> ảo
+  const exportData = (format: "csv" | "json") => {
+    if (files.length === 0) { toastInfo("Không có file nào để xuất"); return; }
+
+    let content: string;
+    let mimeType: string;
+    let extension: string;
+
+    if (format === "csv") {
+      const header = "Tên file,Loại,Kích thước (bytes),Ngày upload,URL";
+      const rows = files.map((f) =>
+        [`"${f.originalName}"`, f.mimetype, f.size, new Date(f.createdAt).toLocaleDateString("vi-VN"), f.url ?? ""].join(",")
+      );
+      content = [header, ...rows].join("\n");
+      mimeType = "text/csv;charset=utf-8;";
+      extension = "csv";
+    } else {
+      content = JSON.stringify(
+        files.map((f) => ({
+          name: f.originalName,
+          type: f.mimetype,
+          size: f.size,
+          uploadedAt: f.createdAt,
+          url: f.url,
+        })),
+        null, 2
+      );
+      mimeType = "application/json";
+      extension = "json";
+    }
+
+    // Tạo Blob từ string, sau đó tạo URL tạm thời và click <a> ảo để tải xuống
+    const blob = new Blob([content], { type: mimeType });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `files-export-${new Date().toISOString().slice(0, 10)}.${extension}`;
+    a.click();
+    // Giải phóng URL object sau khi dùng xong (tránh memory leak)
+    URL.revokeObjectURL(url);
+    toastSuccess(`Đã xuất ${files.length} file ra .${extension}`);
   };
 
   // ── Drag & Drop handlers ────────────────────────────────────────────────
@@ -499,15 +667,109 @@ export default function FilesPage() {
               </div>
             </div>
 
+            {/* ── Search + Filter bar (Tính năng 1) ── */}
+            <div className="mb-4 space-y-3">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Tìm file... (phím /)"
+                    className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
+                  )}
+                </div>
+                <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  title="Từ ngày" />
+                <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  title="Đến ngày" />
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {(["all", "image", "video", "pdf", "other"] as const).map((t) => (
+                  <button key={t} onClick={() => setFilterType(t)}
+                    className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                      filterType === t
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-600 hover:border-blue-400"
+                    }`}>
+                    {{ all: "Tất cả", image: "🖼 Ảnh", video: "🎬 Video", pdf: "📄 PDF", other: "📁 Khác" }[t]}
+                  </button>
+                ))}
+                {(searchQuery || filterType !== "all" || filterDateFrom || filterDateTo) && (
+                  <button onClick={() => { setSearchQuery(""); setFilterType("all"); setFilterDateFrom(""); setFilterDateTo(""); }}
+                    className="px-3 py-1 text-xs rounded-full border border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                    Xóa bộ lọc ✕
+                  </button>
+                )}
+                <div className="ml-auto flex items-center gap-2">
+                  {/* Multi-select toggle (Tính năng 2) */}
+                  <button onClick={() => { setIsSelecting((v) => !v); setSelectedIds(new Set()); }}
+                    className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                      isSelecting
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-600"
+                    }`}>
+                    {isSelecting ? `☑ Đang chọn (${selectedIds.size})` : "☐ Chọn nhiều"}
+                  </button>
+                  {/* Export dropdown (Tính năng 4) */}
+                  <button onClick={() => exportData("csv")}
+                    className="px-3 py-1 text-xs rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:border-green-400 hover:text-green-600 transition-colors"
+                    title="Xuất danh sách file">
+                    ↓ CSV
+                  </button>
+                  <button onClick={() => exportData("json")}
+                    className="px-3 py-1 text-xs rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                    title="Xuất JSON">
+                    ↓ JSON
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Bulk delete bar */}
+            {isSelecting && selectedIds.size > 0 && (
+              <div className="mb-4 flex items-center gap-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 animate-fade-in-up">
+                <span className="text-sm text-red-700 dark:text-red-300 flex-1">Đã chọn {selectedIds.size} file</span>
+                <button onClick={() => setSelectedIds(new Set())} className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400">Bỏ chọn tất cả</button>
+                <button onClick={handleBulkDelete} className="bg-red-600 text-white text-xs px-4 py-1.5 rounded-lg hover:bg-red-700 transition-colors">
+                  Xóa {selectedIds.size} file
+                </button>
+              </div>
+            )}
+
             {files.length === 0 ? (
               <div className="text-center py-16 text-gray-400 dark:text-gray-500 animate-fade-in">
-                <p className="text-5xl mb-3 animate-float inline-block">📂</p>
-                <p>Chưa có file nào. Hãy upload file đầu tiên!</p>
+                <p className="text-5xl mb-3 animate-float inline-block">
+                  {searchQuery || filterType !== "all" ? "🔍" : "📂"}
+                </p>
+                <p>{searchQuery || filterType !== "all" ? `Không tìm thấy file nào` : "Chưa có file nào. Hãy upload file đầu tiên!"}</p>
               </div>
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-2 gap-4">
                 {files.map((file, i) => (
-                  <div key={file._id} className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col card-lift animate-fade-in-up`} style={{ animationDelay: `${i * 60}ms` }}>
+                  <div key={file._id}
+                    onClick={isSelecting ? (e) => toggleSelect(file._id, i, e.shiftKey) : undefined}
+                    className={`relative rounded-xl border overflow-hidden flex flex-col card-lift animate-fade-in-up transition-colors duration-150 ${
+                      isSelecting ? "cursor-pointer" : ""
+                    } ${
+                      selectedIds.has(file._id)
+                        ? "bg-indigo-50 dark:bg-indigo-900/25 border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-400"
+                        : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700"
+                    }`}
+                    style={{ animationDelay: `${i * 60}ms` }}
+                  >
+                    {isSelecting && (
+                      <div className="absolute top-2 left-2 z-10">
+                        <input type="checkbox" readOnly checked={selectedIds.has(file._id)} className="w-4 h-4 accent-indigo-600" />
+                      </div>
+                    )}
                     <div
                       className="relative bg-gray-100 dark:bg-gray-700 aspect-video flex items-center justify-center overflow-hidden cursor-zoom-in"
                       onClick={() =>
@@ -564,6 +826,14 @@ export default function FilesPage() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
                       <tr>
+                        {isSelecting && (
+                          <th className="w-10 px-4 py-3">
+                            <input type="checkbox" readOnly className="w-4 h-4 accent-indigo-600"
+                              checked={selectedIds.size === files.length && files.length > 0}
+                              onClick={() => setSelectedIds(selectedIds.size === files.length ? new Set() : new Set(files.map((f) => f._id)))}
+                            />
+                          </th>
+                        )}
                         <th className="text-left px-4 py-3 text-gray-500 dark:text-gray-400 font-medium">File</th>
                         <th className="text-left px-4 py-3 text-gray-500 dark:text-gray-400 font-medium">Loại</th>
                         <th className="text-left px-4 py-3 text-gray-500 dark:text-gray-400 font-medium">Kích thước</th>
@@ -573,8 +843,18 @@ export default function FilesPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                      {files.map((file) => (
-                        <tr key={file._id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      {files.map((file, i) => (
+                        <tr key={file._id}
+                          onClick={isSelecting ? (e) => toggleSelect(file._id, i, e.shiftKey) : undefined}
+                          className={`transition-colors duration-150 ${isSelecting ? "cursor-pointer" : ""} ${
+                            selectedIds.has(file._id) ? "bg-indigo-50 dark:bg-indigo-900/25" : "hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                          }`}
+                        >
+                          {isSelecting && (
+                            <td className="px-4 py-3">
+                              <input type="checkbox" readOnly checked={selectedIds.has(file._id)} className="w-4 h-4 accent-indigo-600" />
+                            </td>
+                          )}
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <span>{getFileIcon(file.mimetype)}</span>
@@ -1266,6 +1546,35 @@ export default function FilesPage() {
                 {shareMsg.text}
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard Shortcuts Modal (Tính năng 3) — hiện khi nhấn '?' */}
+      {showShortcuts && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowShortcuts(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-800 dark:text-gray-100">Phím tắt</h3>
+              <button onClick={() => setShowShortcuts(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">✕</button>
+            </div>
+            <div className="space-y-2 text-sm">
+              {[
+                ["/  hoặc  Ctrl+K", "Focus ô tìm kiếm"],
+                ["G", "Chuyển Grid / Table"],
+                ["U", "Mở hộp upload file"],
+                ["☐ Chọn nhiều → A", "Chọn / bỏ chọn tất cả"],
+                ["☐ Chọn nhiều → Delete", "Xóa file đã chọn"],
+                ["Shift + Click", "Chọn nhiều file liên tiếp"],
+                ["Escape", "Đóng modal / Thoát chế độ chọn"],
+                ["?", "Hiện / ẩn trang này"],
+              ].map(([key, desc]) => (
+                <div key={key} className="flex items-center justify-between gap-4">
+                  <kbd className="bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-0.5 rounded text-xs font-mono flex-shrink-0">{key}</kbd>
+                  <span className="text-gray-600 dark:text-gray-400 text-right">{desc}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
