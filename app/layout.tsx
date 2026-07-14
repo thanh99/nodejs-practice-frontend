@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { AuthProvider } from "@/context/AuthContext";
+import ReduxProvider from "@/components/ReduxProvider";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { NotificationProvider } from "@/context/NotificationContext";
 import { ToastProvider } from "@/context/ToastContext";
@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="vi" suppressHydrationWarning>
       <body className="min-h-screen" suppressHydrationWarning>
         <ThemeProvider>
-          <AuthProvider>
+          <ReduxProvider>
             <ToastProvider>
               <NotificationProvider>
                 <RippleEffect />
@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 {children}
               </NotificationProvider>
             </ToastProvider>
-          </AuthProvider>
+          </ReduxProvider>
         </ThemeProvider>
       </body>
     </html>

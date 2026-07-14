@@ -2,50 +2,33 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/context/ToastContext";
 import { useDebounce } from "@/hooks/useDebounce";
 import Navbar from "@/components/Navbar";
-import api from "@/lib/api";
-
-type FileItem = {
-  _id: string;
-  originalName: string;
-  filename: string;
-  mimetype: string;
-  size: number;
-  url?: string;
-  createdAt: string;
-  owner: { username: string; email: string };
-};
-
-type ShareItem = {
-  _id: string;
-  file: {
-    _id: string;
-    originalName: string;
-    mimetype: string;
-    size: number;
-    url?: string;
-    createdAt: string;
-  };
-  sharedBy: { username: string; email: string };
-  sharedTo: { username: string; email: string };
-  createdAt: string;
-};
-
-type FavoriteItem = {
-  _id: string;
-  file: {
-    _id: string;
-    originalName: string;
-    mimetype: string;
-    size: number;
-    url?: string;
-    createdAt: string;
-  };
-  createdAt: string;
-};
+import { useAppDispatch } from "@/store/hooks";
+import {
+  filesApi,
+  useGetFilesQuery,
+  useUploadFilesMutation,
+  useDeleteFileMutation,
+  useBulkDeleteFilesMutation,
+  type FileItem,
+  type GetFilesArgs,
+} from "@/store/api/filesApi";
+import {
+  useGetReceivedSharesQuery,
+  useGetSentSharesQuery,
+  useCreateShareMutation,
+  useRevokeShareMutation,
+  type ShareItem,
+} from "@/store/api/sharesApi";
+import {
+  useGetFavoritesQuery,
+  useAddFavoriteMutation,
+  useRemoveFavoriteMutation,
+  type FavoriteItem,
+} from "@/store/api/favoritesApi";
 
 type Tab = "mine" | "received" | "sent" | "favorites";
 
@@ -68,14 +51,11 @@ export default function FilesPage() {
   const { user, loading } = useAuth();
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const router = useRouter();
+  const dispatch = useAppDispatch();
 
   const [tab, setTab] = useState<Tab>("mine");
   const [highlightedFileId, setHighlightedFileId] = useState<string | null>(null);
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [receivedShares, setReceivedShares] = useState<ShareItem[]>([]);
-  const [sentShares, setSentShares] = useState<ShareItem[]>([]);
 
-  const [uploading, setUploading] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
 
@@ -84,17 +64,7 @@ export default function FilesPage() {
 
   const [shareModal, setShareModal] = useState<FileItem | null>(null);
   const [shareInput, setShareInput] = useState("");
-  const [shareLoading, setShareLoading] = useState(false);
   const [shareMsg, setShareMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
-
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
-  const [favoriteFiles, setFavoriteFiles] = useState<FavoriteItem[]>([]);
-
-  // Infinite scroll
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const sentinelRef = useRef<HTMLDivElement>(null);
 
   // ── Search + Filter (Tính năng 1) ──────────────────────────────────────
   type FilterType = "all" | "image" | "video" | "pdf" | "other";
@@ -106,9 +76,59 @@ export default function FilesPage() {
   const debouncedSearch = useDebounce(searchQuery, 400);
   const searchInputRef  = useRef<HTMLInputElement>(null);
 
-  // Ref luôn giữ giá trị filter hiện tại — dùng trong IntersectionObserver
-  // (tránh stale closure vì observer callback không re-subscribe khi state thay đổi)
-  const filterRef = useRef({ search: "", type: "all", dateFrom: "", dateTo: "" });
+  // Infinite scroll — `page` là arg truyền cho RTK Query, tăng lên khi sentinel
+  // vào viewport. Cache của getFiles tự gộp (merge) các trang lại với nhau,
+  // không cần tự quản lý mảng `files` bằng useState như trước nữa.
+  const [page, setPage] = useState(1);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const filesQueryArgs: GetFilesArgs = {
+    page,
+    limit: 20,
+    search: debouncedSearch || undefined,
+    type: filterType !== "all" ? filterType : undefined,
+    dateFrom: filterDateFrom || undefined,
+    dateTo: filterDateTo || undefined,
+    all: allFiles && user?.role === "admin",
+  };
+  const { data: filesData, isFetching: isFilesFetching } = useGetFilesQuery(filesQueryArgs, {
+    skip: !user || tab !== "mine",
+  });
+  const files = filesData?.files ?? [];
+  const hasMore = filesData?.hasMore ?? false;
+  const loadingMore = isFilesFetching && page > 1;
+
+  // Shares/Favorites: giữ state cục bộ (đồng bộ từ RTK Query qua effect bên dưới)
+  // để giữ nguyên UX cập nhật tức thì (optimistic) khi revoke/toggle favorite,
+  // giống hệt hành vi cũ thay vì đợi round-trip refetch.
+  const [receivedShares, setReceivedShares] = useState<ShareItem[]>([]);
+  const [sentShares, setSentShares] = useState<ShareItem[]>([]);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [favoriteFiles, setFavoriteFiles] = useState<FavoriteItem[]>([]);
+
+  const { data: receivedData } = useGetReceivedSharesQuery(undefined, { skip: !user || tab !== "received" });
+  useEffect(() => { if (receivedData) setReceivedShares(receivedData.shares); }, [receivedData]);
+
+  const { data: sentData } = useGetSentSharesQuery(undefined, { skip: !user || tab !== "sent" });
+  useEffect(() => { if (sentData) setSentShares(sentData.shares); }, [sentData]);
+
+  // Favorites: luôn fetch khi có user (không phụ thuộc tab) vì cần favoriteIds
+  // để hiện đúng trạng thái ngôi sao ở mọi tab, không chỉ riêng tab "favorites".
+  const { data: favoritesData } = useGetFavoritesQuery(undefined, { skip: !user });
+  useEffect(() => {
+    if (favoritesData) {
+      setFavoriteFiles(favoritesData.favorites);
+      setFavoriteIds(new Set(favoritesData.favorites.map((f) => f.file._id)));
+    }
+  }, [favoritesData]);
+
+  const [uploadFilesMutation, { isLoading: uploading }] = useUploadFilesMutation();
+  const [deleteFileMutation] = useDeleteFileMutation();
+  const [bulkDeleteFilesMutation] = useBulkDeleteFilesMutation();
+  const [createShareMutation, { isLoading: shareLoading }] = useCreateShareMutation();
+  const [revokeShareMutation] = useRevokeShareMutation();
+  const [addFavoriteMutation] = useAddFavoriteMutation();
+  const [removeFavoriteMutation] = useRemoveFavoriteMutation();
 
   // ── Multi-select + Bulk Delete (Tính năng 2) ───────────────────────────
   const [selectedIds,  setSelectedIds]  = useState<Set<string>>(new Set());
@@ -196,89 +216,22 @@ export default function FilesPage() {
     }
   }, []);
 
-  // Cập nhật filterRef mỗi khi filter thay đổi
-  useEffect(() => {
-    filterRef.current = {
-      search: debouncedSearch,
-      type: filterType,
-      dateFrom: filterDateFrom,
-      dateTo: filterDateTo,
-    };
-  }, [debouncedSearch, filterType, filterDateFrom, filterDateTo]);
-
-  type FetchOpts = { search?: string; type?: string; dateFrom?: string; dateTo?: string };
-
-  const fetchFiles = async (pageNum = 1, append = false, opts: FetchOpts = filterRef.current) => {
-    if (append) setLoadingMore(true);
-    try {
-      const endpoint = allFiles && user?.role === "admin" ? "/files/all" : "/files";
-      const params: Record<string, string | number> = { page: pageNum, limit: 20 };
-      if (opts.search) params.search = opts.search;
-      if (opts.type && opts.type !== "all") params.type = opts.type;
-      if (opts.dateFrom) params.dateFrom = opts.dateFrom;
-      if (opts.dateTo)   params.dateTo   = opts.dateTo;
-      const { data } = await api.get(endpoint, { params });
-      setFiles((prev) => append ? [...prev, ...data.files] : data.files);
-      setHasMore(data.hasMore ?? false);
-      setPage(pageNum);
-    } catch {} finally {
-      if (append) setLoadingMore(false);
-    }
-  };
-
-  const fetchReceivedShares = async () => {
-    try {
-      const { data } = await api.get("/shares/received");
-      setReceivedShares(data.shares);
-    } catch {}
-  };
-
-  const fetchSentShares = async () => {
-    try {
-      const { data } = await api.get("/shares/sent");
-      setSentShares(data.shares);
-    } catch {}
-  };
-
-  const fetchFavorites = async () => {
-    try {
-      const { data } = await api.get("/favorites");
-      setFavoriteFiles(data.favorites);
-      setFavoriteIds(new Set(data.favorites.map((f: FavoriteItem) => f.file._id)));
-    } catch {}
-  };
-
-  // Load favorites ids on mount để hiện đúng trạng thái ngôi sao
-  useEffect(() => {
-    if (user) fetchFavorites();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (tab === "mine") {
-      setPage(1);
-      setHasMore(false);
-      setSelectedIds(new Set());
-      fetchFiles(1, false);
-    } else if (tab === "received") fetchReceivedShares();
-    else if (tab === "sent") fetchSentShares();
-    else if (tab === "favorites") fetchFavorites();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, tab, allFiles]);
-
-  // Refetch khi debounced search hoặc filter thay đổi
+  // Chuyển tab/toggle "tất cả file" (admin) → reset về trang 1 + bỏ chọn.
+  // Không cần tự fetch nữa: đổi `tab`/`allFiles` làm queryArgs đổi theo, các
+  // hook useGetXQuery ở trên tự chạy lại nhờ điều kiện `skip`.
   useEffect(() => {
     if (!user || tab !== "mine") return;
     setPage(1);
-    setHasMore(false);
     setSelectedIds(new Set());
-    fetchFiles(1, false, {
-      search: debouncedSearch,
-      type: filterType,
-      dateFrom: filterDateFrom,
-      dateTo: filterDateTo,
-    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, tab, allFiles]);
+
+  // Refetch khi debounced search hoặc filter thay đổi — tương tự, chỉ cần reset `page`,
+  // filesQueryArgs đổi sẽ tự tạo cache entry mới (RTK Query lo phần fetch).
+  useEffect(() => {
+    if (!user || tab !== "mine") return;
+    setPage(1);
+    setSelectedIds(new Set());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch, filterType, filterDateFrom, filterDateTo]);
 
@@ -289,7 +242,7 @@ export default function FilesPage() {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !loadingMore) {
-          fetchFiles(page + 1, true);
+          setPage((p) => p + 1);
         }
       },
       { rootMargin: "200px" }
@@ -303,13 +256,13 @@ export default function FilesPage() {
     e?.stopPropagation();
     if (favoriteIds.has(fileId)) {
       try {
-        await api.delete(`/favorites/${fileId}`);
+        await removeFavoriteMutation(fileId).unwrap();
         setFavoriteIds((prev) => { const s = new Set(prev); s.delete(fileId); return s; });
         setFavoriteFiles((prev) => prev.filter((f) => f.file._id !== fileId));
       } catch {}
     } else {
       try {
-        await api.post("/favorites", { fileId });
+        await addFavoriteMutation(fileId).unwrap();
         setFavoriteIds((prev) => new Set(prev).add(fileId));
         // Sẽ tự refresh khi user chuyển sang tab favorites
       } catch {}
@@ -319,7 +272,6 @@ export default function FilesPage() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files ?? []);
     if (selectedFiles.length === 0) return;
-    setUploading(true);
     const msg = selectedFiles.length === 1
       ? `Đang upload "${selectedFiles[0].name}"...`
       : `Đang upload ${selectedFiles.length} files...`;
@@ -327,18 +279,14 @@ export default function FilesPage() {
     const formData = new FormData();
     selectedFiles.forEach((file) => formData.append("files", file));
     try {
-      const { data } = await api.post("/files/upload", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const data = await uploadFilesMutation(formData).unwrap();
       toastSuccess(data.message);
-      fetchFiles(1, false);
+      setPage(1);
     } catch (err: unknown) {
       toastError(
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-          "Upload thất bại"
+        (err as { data?: { message?: string } })?.data?.message || "Upload thất bại"
       );
     } finally {
-      setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -346,8 +294,15 @@ export default function FilesPage() {
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Xóa file "${name}"?`)) return;
     try {
-      await api.delete(`/files/${id}`);
-      setFiles((prev) => prev.filter((f) => f._id !== id));
+      await deleteFileMutation(id).unwrap();
+      // invalidatesTags không dùng ở đây vì cache getFiles có thể đang gộp
+      // nhiều trang (page > 1) — tự vá cache thay vì để RTK Query tự refetch
+      // (tránh bug nối chồng dữ liệu). Xem ghi chú trong store/api/filesApi.ts.
+      dispatch(
+        filesApi.util.updateQueryData("getFiles", filesQueryArgs, (draft) => {
+          draft.files = draft.files.filter((f) => f._id !== id);
+        })
+      );
       toastSuccess(`Đã xóa "${name}"`);
     } catch {
       toastError("Xóa file thất bại");
@@ -356,31 +311,26 @@ export default function FilesPage() {
 
   const handleShare = async () => {
     if (!shareModal || !shareInput.trim()) return;
-    setShareLoading(true);
     setShareMsg(null);
     try {
-      const { data } = await api.post("/shares", {
+      const data = await createShareMutation({
         fileId: shareModal._id,
         identifier: shareInput.trim(),
-      });
+      }).unwrap();
       setShareMsg({ type: "success", text: data.message });
       setShareInput("");
     } catch (err: unknown) {
       setShareMsg({
         type: "error",
-        text:
-          (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-          "Chia sẻ thất bại",
+        text: (err as { data?: { message?: string } })?.data?.message || "Chia sẻ thất bại",
       });
-    } finally {
-      setShareLoading(false);
     }
   };
 
   const handleRevoke = async (shareId: string) => {
     if (!confirm("Thu hồi chia sẻ này?")) return;
     try {
-      await api.delete(`/shares/${shareId}`);
+      await revokeShareMutation(shareId).unwrap();
       setSentShares((prev) => prev.filter((s) => s._id !== shareId));
       toastSuccess("Đã thu hồi chia sẻ");
     } catch {
@@ -438,8 +388,12 @@ export default function FilesPage() {
     if (selectedIds.size === 0) return;
     if (!confirm(`Xóa ${selectedIds.size} file đã chọn?`)) return;
     try {
-      const { data } = await api.delete("/files/bulk", { data: { ids: [...selectedIds] } });
-      setFiles((prev) => prev.filter((f) => !selectedIds.has(f._id)));
+      const data = await bulkDeleteFilesMutation([...selectedIds]).unwrap();
+      dispatch(
+        filesApi.util.updateQueryData("getFiles", filesQueryArgs, (draft) => {
+          draft.files = draft.files.filter((f) => !selectedIds.has(f._id));
+        })
+      );
       setSelectedIds(new Set());
       toastSuccess(data.message);
     } catch {
@@ -527,7 +481,6 @@ export default function FilesPage() {
     // Chuyển sang tab "mine" nếu đang ở tab khác
     setTab("mine");
 
-    setUploading(true);
     const msg = droppedFiles.length === 1
       ? `Đang upload "${droppedFiles[0].name}"...`
       : `Đang upload ${droppedFiles.length} files...`;
@@ -537,18 +490,13 @@ export default function FilesPage() {
     droppedFiles.forEach((f) => formData.append("files", f));
 
     try {
-      const { data } = await api.post("/files/upload", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const data = await uploadFilesMutation(formData).unwrap();
       toastSuccess(data.message);
-      fetchFiles(1, false);
+      setPage(1);
     } catch (err: unknown) {
       toastError(
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        || "Upload thất bại"
+        (err as { data?: { message?: string } })?.data?.message || "Upload thất bại"
       );
-    } finally {
-      setUploading(false);
     }
   };
   // ────────────────────────────────────────────────────────────────────────

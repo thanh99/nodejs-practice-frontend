@@ -1,24 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 import Navbar from "@/components/Navbar";
-import api from "@/lib/api";
-
-type AdminStats = {
-  totalUsers: number;
-  totalFiles: number;
-  totalStorage: number;
-  filesByDay: { _id: string; count: number; size: number }[];
-  usersByDay: { _id: string; count: number }[];
-};
-
-type UserStats = {
-  totalFiles: number;
-  storageUsed: number;
-  filesByDay: { _id: string; count: number }[];
-};
+import { useGetAdminStatsQuery, useGetMyStatsQuery } from "@/store/api/statsApi";
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
@@ -66,21 +52,12 @@ function BarChart({ data, label }: { data: { _id: string; count: number }[]; lab
 export default function StatsPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
-  const [userStats, setUserStats] = useState<UserStats | null>(null);
+  const { data: adminStats } = useGetAdminStatsQuery(undefined, { skip: !user || user.role !== "admin" });
+  const { data: userStats } = useGetMyStatsQuery(undefined, { skip: !user || user.role === "admin" });
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
   }, [user, loading, router]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (user.role === "admin") {
-      api.get("/stats/admin").then((r) => setAdminStats(r.data)).catch(() => {});
-    } else {
-      api.get("/stats/me").then((r) => setUserStats(r.data)).catch(() => {});
-    }
-  }, [user]);
 
   if (loading || !user) return null;
 

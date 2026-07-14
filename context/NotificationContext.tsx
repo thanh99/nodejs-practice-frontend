@@ -5,7 +5,7 @@ import {
   useState, useCallback,
 } from "react";
 import { io, Socket } from "socket.io-client";
-import { useAuth } from "./AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 import api from "@/lib/api";
 
 export type NotifType = "file_shared" | "share_revoked";

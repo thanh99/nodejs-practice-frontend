@@ -1,16 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 import Navbar from "@/components/Navbar";
-import api from "@/lib/api";
-
-type Stats = {
-  totalFiles: number;
-  storageUsed: number;
-};
+import { useGetMyStatsQuery } from "@/store/api/statsApi";
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
@@ -23,17 +18,11 @@ function formatBytes(bytes: number) {
 export default function DashboardPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const [stats, setStats] = useState<Stats | null>(null);
+  const { data: stats } = useGetMyStatsQuery(undefined, { skip: !user });
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
   }, [user, loading, router]);
-
-  useEffect(() => {
-    if (user) {
-      api.get("/stats/me").then((r) => setStats(r.data)).catch(() => {});
-    }
-  }, [user]);
 
   if (loading || !user) return null;
 
